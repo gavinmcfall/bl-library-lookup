@@ -95,7 +95,7 @@ blmeta -i shelf.txt -o out.csv --refresh      # bypass the cache
 | `--json-out` | full records as JSON, including nested provenance |
 | `--raw-dir` | preserve raw MARCXML/JSON evidence per ISBN |
 | `--inherit-siblings` | fill work-level fields on uncatalogued editions from a catalogued sibling |
-| `--publisher-hint` | narrows sibling searches when no author is known (default `Black Library`) |
+| `--publisher-hint` | comma-separated names treated as one house (default `Black Library,Games Workshop`) |
 | `--gaps` | write a per-book checklist of still-missing fields |
 | `--sources` | pick sources: `nls,libraryhub,openlibrary,googlebooks` |
 | `--delay` | seconds between requests to one host (default 1.0) |
@@ -210,7 +210,10 @@ rather than the edition:
   publication date, price, cover — these differ between editions by definition.
 
 Publisher, imprint and place describe the *issue* rather than the work, so they
-are inherited only from a sibling published by the same house. A sibling can be
+are inherited only from a sibling published by the same house. "Same house" is
+judged against `--publisher-hint`, which takes a list because one publisher
+catalogues under several names — Black Library is Games Workshop's fiction
+imprint, and records appear under both. A sibling can be
 a reissue by someone else — a Hachette partwork of a Black Library novel, say —
 and stamping that imprint on your edition would misdescribe it. When those
 fields are withheld, the reason is recorded in `warnings`.

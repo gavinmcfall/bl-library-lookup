@@ -194,10 +194,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--publisher-hint",
-        default="Black Library",
+        default="Black Library,Games Workshop",
         help=(
-            "publisher used to narrow sibling searches when no author is known "
-            "(default: 'Black Library'; pass '' to disable)"
+            "comma-separated publisher names treated as the same house, used to "
+            "narrow sibling searches and to decide whether a sibling's imprint "
+            "may be inherited (pass '' to disable)"
         ),
     )
     parser.add_argument(

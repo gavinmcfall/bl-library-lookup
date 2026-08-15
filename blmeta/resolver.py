@@ -50,6 +50,24 @@ INHERITABLE_FIELDS = (
 ISSUE_LEVEL_FIELDS = frozenset({"publisher", "imprint", "publication_place"})
 
 
+def _same_publisher(hint: str, found: str) -> bool:
+    """Whether two publisher strings name the same house.
+
+    The hint may list equivalent names, because one house catalogues under
+    several: Black Library is Games Workshop's fiction imprint, so records
+    appear under either. An empty hint or an empty record imposes no
+    restriction.
+    """
+    if not hint or not found:
+        return True
+    lowered = found.lower()
+    return any(
+        alias.strip().lower() in lowered
+        for alias in hint.split(",")
+        if alias.strip()
+    )
+
+
 def _utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -104,7 +122,7 @@ class Resolver:
         source_names: tuple[str, ...] = DEFAULT_SOURCES,
         raw_dir: Path | None = None,
         inherit_siblings: bool = False,
-        publisher_hint: str = "Black Library",
+        publisher_hint: str = "Black Library,Games Workshop",
     ):
         self.fetcher = fetcher
         self.raw_dir = raw_dir
@@ -281,11 +299,8 @@ class Resolver:
             descriptions.append(f"{other} ({label})")
 
             if self.inherit_siblings:
-                publisher = self.publisher_hint
                 sibling_publisher = str(data.get("publisher", ""))
-                same_house = not publisher or not sibling_publisher or (
-                    publisher.lower() in sibling_publisher.lower()
-                )
+                same_house = _same_publisher(self.publisher_hint, sibling_publisher)
                 shared = {
                     key: value
                     for key, value in data.items()
@@ -342,7 +357,11 @@ class Resolver:
         # Only the surname is needed, and MARC stores names inverted
         # ("Haley, Guy"), so a full "Guy Haley" string matches poorly.
         surname = author.split(",")[0].split()[-1] if author else ""
-        publisher = str(user_data.get("publisher") or self.publisher_hint or "").strip()
+        # The hint may list equivalent house names; only the first is used as a
+        # search term, while all of them count when judging a match.
+        publisher = str(
+            user_data.get("publisher") or self.publisher_hint.split(",")[0] or ""
+        ).strip()
 
         # A title alone is too weak a query to find siblings, so pair it with a
         # second term. Each strategy is tried until one lands; a wrong hint
@@ -434,9 +453,9 @@ class Resolver:
 
                 if self.inherit_siblings:
                     sibling_publisher = str(data.get("publisher", ""))
-                    same_house = not publisher or not sibling_publisher or (
-                        publisher.lower() in sibling_publisher.lower()
-                    )
+                    # Judge against every alias in the hint, not the single
+                    # term used as the search key.
+                    same_house = _same_publisher(self.publisher_hint, sibling_publisher)
                     shared = {
                         key: value
                         for key, value in data.items()
@@ -447,8 +466,8 @@ class Resolver:
                     if not same_house:
                         warnings.append(
                             f"Sibling record is published by '{sibling_publisher}', "
-                            f"not '{publisher}'; its imprint details were not "
-                            "inherited."
+                            f"which is not among '{self.publisher_hint}'; its "
+                            "imprint details were not inherited."
                         )
                     if shared:
                         known = sorted(candidate.isbns)

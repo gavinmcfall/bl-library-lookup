@@ -43,7 +43,7 @@ class _NationalStub(Source):
         return self._siblings
 
 
-def _resolver(sources, inherit=False, publisher_hint="Black Library"):
+def _resolver(sources, inherit=False, publisher_hint="Black Library,Games Workshop"):
     resolver = Resolver.__new__(Resolver)
     resolver.fetcher = None
     resolver.raw_dir = None
@@ -356,3 +356,24 @@ class TestDeclaredSiblings(unittest.TestCase):
         record = self._resolve([LIMITED])
         self.assertEqual(record.sibling_isbns, [])
         self.assertTrue(any("own ISBN" in w for w in record.warnings))
+
+
+class TestPublisherAliases(unittest.TestCase):
+    """One house catalogues under several names."""
+
+    def _publisher(self, sibling_publisher, hint="Black Library,Games Workshop"):
+        data = dict(SIBLING_DATA)
+        data["publisher"] = sibling_publisher
+        resolver = _resolver(
+            [_NationalStub([Candidate({TRADE_HB}, data)])], inherit=True, publisher_hint=hint
+        )
+        return resolver.resolve(LIMITED, user_data={"title": "Dante"}).publisher
+
+    def test_games_workshop_counts_as_black_library(self):
+        self.assertEqual(self._publisher("Games Workshop, Limited"), "Games Workshop, Limited")
+
+    def test_black_library_still_matches(self):
+        self.assertEqual(self._publisher("Black Library"), "Black Library")
+
+    def test_unrelated_house_still_withheld(self):
+        self.assertEqual(self._publisher("Hachette Partworks Ltd"), "")
