@@ -63,12 +63,18 @@ can stop at any point:
 
 **CSV with a header**, if you would rather work in a spreadsheet. Recognised
 columns include `isbn`, `title`, `author`, `copy_number`/`edition_number`,
-`print_run`, `signed`, `notes`:
+`print_run`, `signed`, `notes`, `product_code`, `asin`, and `sibling_isbn`:
 
 ```csv
-isbn,title,author,copy_number,signed
-9781784961480,Dante,Guy Haley,247/1500,yes
+isbn,title,author,copy_number,signed,sibling_isbn
+9781784961480,Dante,Guy Haley,247/1500,yes,9781784965297;9781784966669
 ```
+
+`sibling_isbn` takes a semicolon-separated list of other editions of the same
+work. Knowing the trade edition's ISBN identifies a limited edition far more
+directly than any title search — but each one is still looked up by exact
+ISBN, so a wrong or mistyped number is reported as `unverified` rather than
+believed.
 
 Anything you supply yourself outranks every online source. For copy-specific
 facts that is simply correct: no database on earth knows your copy is №247.

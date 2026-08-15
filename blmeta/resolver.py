@@ -60,6 +60,32 @@ def _normalise_title(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", value.lower())
 
 
+def _collects_work(query: str, candidate: dict[str, object]) -> bool:
+    """Whether a volume collects the queried work.
+
+    An omnibus lists its contents in the 245 subtitle or a 505 note, as
+    colon- or dash-separated titles ("flesh of Cretacia : Sons of Wrath :
+    Trial by blood"). Each segment is compared whole, so a novella is matched
+    only by its own title and never by a stray substring.
+    """
+    target = _normalise_title(query)
+    if not target:
+        return False
+    haystack = " : ".join(
+        str(candidate.get(key, "")) for key in ("subtitle", "contents") if candidate.get(key)
+    )
+    for segment in re.split(r"[:;/]|--", haystack):
+        if _normalise_title(segment) == target:
+            return True
+    return False
+
+
+def _tidy_label(data: dict[str, object]) -> str:
+    """Short human description of a catalogue record: title, year."""
+    parts = [str(data.get("title", "")), str(data.get("publication_date", ""))]
+    return " ".join(p for p in parts if p).strip()
+
+
 def _same_work(query: str, candidate: str) -> bool:
     """Whether a catalogue hit is really the same work as the one asked for.
 
@@ -107,6 +133,12 @@ class Resolver:
             )
             return record
 
+        # Sibling ISBNs you supply are verified, never taken on trust: each is
+        # looked up by exact ISBN like any other query.
+        declared = user_data.pop("declared_siblings", [])
+        if isinstance(declared, str):
+            declared = [declared]
+
         found: list[SourceRecord] = []
         if user_data:
             found.append(
@@ -150,7 +182,10 @@ class Resolver:
         # uncatalogued limited edition.
         sibling_note = None
         if not catalogue_hit:
-            sibling_note = self._find_siblings(isbn13, user_data, found, warnings)
+            if declared:
+                sibling_note = self._verify_declared(isbn13, declared, found, warnings)
+            if not sibling_note:
+                sibling_note = self._find_siblings(isbn13, user_data, found, warnings)
 
         record = merge(isbn13, found, _utc_now())
         record.warnings.extend(warnings)
@@ -194,6 +229,96 @@ class Resolver:
         self._flag_special_edition(record)
         return record
 
+    def _verify_declared(
+        self,
+        isbn13: str,
+        declared: list[str],
+        found: list[SourceRecord],
+        warnings: list[str],
+    ) -> str | None:
+        """Check sibling ISBNs you supplied, and record what they turn out to be.
+
+        Knowing the trade edition's ISBN is common -- it is often printed on a
+        listing or the book itself -- and it identifies an uncatalogued edition
+        far more directly than a title search. Each one is still looked up by
+        exact ISBN, so a mistyped or wrong number is reported, not believed.
+        """
+        confirmed: list[str] = []
+        descriptions: list[str] = []
+
+        for raw in declared:
+            other = isbn_utils.canonical(raw)
+            if not other:
+                warnings.append(f"declared sibling '{raw}' is not a valid ISBN")
+                continue
+            if isbn_utils.matches(isbn13, other):
+                warnings.append(
+                    f"declared sibling {other} is this edition's own ISBN; ignored"
+                )
+                continue
+
+            record = None
+            for source in self.sources:
+                try:
+                    record = source.lookup(other)
+                except Exception:  # a failed sibling check is not fatal
+                    continue
+                if record:
+                    break
+
+            if not record:
+                warnings.append(
+                    f"declared sibling {other} could not be confirmed in any source; "
+                    "recorded as unverified"
+                )
+                confirmed.append(other)
+                descriptions.append(f"{other} (unverified)")
+                continue
+
+            data = record.data
+            label = _tidy_label(data) or "confirmed"
+            confirmed.append(other)
+            descriptions.append(f"{other} ({label})")
+
+            if self.inherit_siblings:
+                publisher = self.publisher_hint
+                sibling_publisher = str(data.get("publisher", ""))
+                same_house = not publisher or not sibling_publisher or (
+                    publisher.lower() in sibling_publisher.lower()
+                )
+                shared = {
+                    key: value
+                    for key, value in data.items()
+                    if key in INHERITABLE_FIELDS
+                    and value
+                    and (same_house or key not in ISSUE_LEVEL_FIELDS)
+                }
+                if shared:
+                    found.append(
+                        SourceRecord(
+                            source=f"sibling:{other}",
+                            confidence=Confidence.MEDIUM,
+                            data=shared,
+                        )
+                    )
+
+        if not confirmed:
+            return None
+
+        found.append(
+            SourceRecord(
+                source="declared-sibling",
+                confidence=Confidence.USER,
+                data={"sibling_isbns": confirmed, "sibling_editions": descriptions},
+            )
+        )
+        return (
+            f"Not catalogued under this ISBN. You supplied {len(confirmed)} sibling "
+            f"edition(s): {', '.join(descriptions)}. An uncatalogued ISBN alongside a "
+            "known sibling edition is the signature of a special/limited edition. "
+            "Sibling data stays in the sibling_* columns."
+        )
+
     def _find_siblings(
         self,
         isbn13: str,
@@ -230,6 +355,7 @@ class Resolver:
         strategies.append(("", ""))
 
         siblings: list[tuple[str, str]] = []
+        collections: list[str] = []
         inheritable: list[SourceRecord] = []
         evidence_found = False
         for source in self.sources:
@@ -247,7 +373,13 @@ class Resolver:
                 except Exception as exc:
                     LOG.warning("%s sibling search failed: %s", source.name, exc)
                     break
-                if any(_same_work(title, str(c.data.get("title", ""))) for c in found_now):
+                # Accept a result set that either holds another edition of the
+                # work or a volume collecting it; both are useful answers.
+                if any(
+                    _same_work(title, str(c.data.get("title", "")))
+                    or _collects_work(title, c.data)
+                    for c in found_now
+                ):
                     candidates = found_now
                     break
 
@@ -256,6 +388,19 @@ class Resolver:
                 # Guard against loose catalogue matching: require the title to
                 # actually correspond, not merely to contain the search term.
                 if not _same_work(title, str(data.get("title", ""))):
+                    # An omnibus that collects this work is not another edition
+                    # of it, so it never counts as a sibling. It is still worth
+                    # recording: it proves the text was published and says where
+                    # it can be found in print.
+                    if _collects_work(title, data):
+                        for other in sorted(candidate.isbns):
+                            if isbn_utils.matches(isbn13, other):
+                                continue
+                            collections.append(
+                                f"{other} ({_tidy_label(data)})"
+                                if _tidy_label(data)
+                                else other
+                            )
                     continue
 
                 evidence_found = True
@@ -320,6 +465,22 @@ class Resolver:
                         )
 
         if not evidence_found:
+            if collections:
+                unique_collections = list(dict.fromkeys(collections))
+                found.append(
+                    SourceRecord(
+                        source="collection-search",
+                        confidence=Confidence.USER,
+                        data={"collected_in": unique_collections},
+                    )
+                )
+                return (
+                    f"Not catalogued under this ISBN, and no separate edition of "
+                    f"'{title}' is catalogued either. The text is in print only as "
+                    f"part of {', '.join(unique_collections)}. A collection is a "
+                    "different work, so it is recorded in collected_in and lends "
+                    "this record nothing."
+                )
             return None
 
         seen: set[str] = set()

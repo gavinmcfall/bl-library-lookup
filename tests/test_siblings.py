@@ -3,7 +3,7 @@ import unittest
 
 from blmeta.cli import read_inputs
 from blmeta.record import Confidence, Status
-from blmeta.resolver import Resolver, _same_work
+from blmeta.resolver import Resolver, _collects_work, _same_work
 from blmeta.sources.base import Candidate, Source
 
 LIMITED = "9781784961480"
@@ -197,6 +197,57 @@ class TestIssueLevelFieldsNotBorrowedAcrossPublishers(unittest.TestCase):
         self.assertEqual(record.publisher, "Hachette Partworks Ltd")
 
 
+class TestCollectionDetection(unittest.TestCase):
+    """A novella may survive in print only inside an omnibus.
+
+    The omnibus is a different work, so it is never a sibling edition -- but
+    recording where the text can be found is useful, and its presence still
+    shows the work was published while this ISBN went uncatalogued.
+    """
+
+    OMNIBUS = Candidate(
+        {"9781784961534", "9781784961541"},
+        {
+            "title": "Flesh tearers",
+            "subtitle": "flesh of Cretacia : Sons of Wrath : Trial by blood",
+            "publication_date": "2016",
+            "publisher": "Black Library",
+        },
+    )
+
+    def test_detects_collected_work(self):
+        self.assertTrue(_collects_work("Sons of Wrath", self.OMNIBUS.data))
+
+    def test_matches_whole_segments_only(self):
+        """A stray substring must not count as a collected title."""
+        self.assertFalse(_collects_work("Wrath", self.OMNIBUS.data))
+        self.assertFalse(_collects_work("Blood", self.OMNIBUS.data))
+
+    def test_reads_505_contents_note(self):
+        data = {"title": "Omnibus", "contents": "Dante -- Ahriman -- Corax"}
+        self.assertTrue(_collects_work("Ahriman", data))
+
+    def test_records_collection_and_identifies_edition(self):
+        resolver = _resolver([_NationalStub([self.OMNIBUS])])
+        record = resolver.resolve(LIMITED, user_data={"title": "Sons of Wrath"})
+        self.assertEqual(record.status, Status.LIKELY_SPECIAL_EDITION)
+        self.assertTrue(record.collected_in)
+        self.assertIn("9781784961534", record.collected_in[0])
+
+    def test_collection_is_never_a_sibling_edition(self):
+        resolver = _resolver([_NationalStub([self.OMNIBUS])])
+        record = resolver.resolve(LIMITED, user_data={"title": "Sons of Wrath"})
+        self.assertEqual(record.sibling_isbns, [])
+
+    def test_collection_lends_no_metadata(self):
+        """An omnibus describes itself, not the novella in hand."""
+        resolver = _resolver([_NationalStub([self.OMNIBUS])], inherit=True)
+        record = resolver.resolve(LIMITED, user_data={"title": "Sons of Wrath"})
+        self.assertEqual(record.title, "Sons of Wrath")
+        self.assertEqual(record.publisher, "")
+        self.assertEqual(record.publication_date, "")
+
+
 class TestUserSuppliedData(unittest.TestCase):
     def test_user_data_alone_is_not_resolved(self):
         resolver = _resolver([_NationalStub()])
@@ -258,3 +309,50 @@ class TestInputParsing(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDeclaredSiblings(unittest.TestCase):
+    """Sibling ISBNs you supply are verified, not believed."""
+
+    class _Verifier(_NationalStub):
+        def __init__(self, known):
+            super().__init__([])
+            self._known = known
+
+        def search(self, isbn13):
+            data = self._known.get(isbn13)
+            return [Candidate({isbn13}, data)] if data else []
+
+    def _resolve(self, declared, known=None):
+        known = known or {TRADE_HB: {"title": "Dante", "publication_date": "2017",
+                                     "publisher": "Black Library", "series": "Blood angels"}}
+        resolver = _resolver([self._Verifier(known)], inherit=True)
+        return resolver.resolve(
+            LIMITED, user_data={"title": "Dante", "declared_siblings": declared}
+        )
+
+    def test_confirmed_sibling_identifies_edition(self):
+        record = self._resolve([TRADE_HB])
+        self.assertEqual(record.status, Status.LIKELY_SPECIAL_EDITION)
+        self.assertEqual(record.sibling_isbns, [TRADE_HB])
+        self.assertIn("Dante", record.sibling_editions[0])
+
+    def test_confirmed_sibling_lends_work_level_fields(self):
+        record = self._resolve([TRADE_HB])
+        self.assertEqual(record.series, "Blood angels")
+        self.assertEqual(record.field_provenance["series"], f"sibling:{TRADE_HB}")
+
+    def test_unconfirmed_sibling_is_marked_not_dropped(self):
+        record = self._resolve([TRADE_PB])
+        self.assertIn(TRADE_PB, record.sibling_isbns)
+        self.assertIn("unverified", record.sibling_editions[0])
+
+    def test_invalid_declared_sibling_is_rejected(self):
+        record = self._resolve(["not-an-isbn"])
+        self.assertEqual(record.sibling_isbns, [])
+        self.assertTrue(any("not a valid ISBN" in w for w in record.warnings))
+
+    def test_self_declared_sibling_is_ignored(self):
+        record = self._resolve([LIMITED])
+        self.assertEqual(record.sibling_isbns, [])
+        self.assertTrue(any("own ISBN" in w for w in record.warnings))

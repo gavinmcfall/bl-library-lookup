@@ -177,6 +177,12 @@ def parse(record: ET.Element) -> dict[str, object]:
             if number:
                 out.setdefault("series_number", number)
 
+        elif tag == "505":
+            # Formatted contents: the works collected in an omnibus.
+            contents = _joined(field, "atr", " ")
+            if contents:
+                out["contents"] = contents
+
         elif tag in ("500", "501", "502", "504", "520", "521", "586"):
             note = _tidy(_joined(field, "a"))
             if note:

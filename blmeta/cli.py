@@ -45,6 +45,12 @@ CSV_ALIASES = {
     "notes": "notes",
     "special_contents": "special_contents",
     "cover_artist": "cover_artist",
+    "product_code": "other_identifiers",
+    "asin": "other_identifiers",
+    "sibling_isbn": "declared_siblings",
+    "sibling_isbns": "declared_siblings",
+    "other_edition_isbn": "declared_siblings",
+    "publisher": "publisher",
     "original_retail_price": "original_retail_price",
 }
 
@@ -98,6 +104,13 @@ def read_inputs(args: argparse.Namespace) -> list[tuple[str, dict[str, object]]]
                         continue
                     if field == "isbn":
                         isbn_value = value.strip()
+                    elif field == "declared_siblings":
+                        data[field] = [v.strip() for v in value.split(";") if v.strip()]
+                    elif field == "other_identifiers":
+                        # Several input columns feed this one field, so append
+                        # rather than replace or only the last one survives.
+                        data.setdefault(field, [])
+                        data[field].append(f"{key.strip().lower()}:{value.strip()}")
                     elif field in ("notes", "special_contents"):
                         data[field] = [value.strip()]
                     else:

@@ -94,6 +94,10 @@ COLLECTIBLE_FIELDS = (
 SIBLING_FIELDS = (
     "sibling_isbns",
     "sibling_editions",
+    # Volumes that collect this work (omnibuses, anthologies). A collection is
+    # a different work, not another edition of this one, so it is recorded
+    # separately again -- it identifies the text, it does not describe the book.
+    "collected_in",
 )
 
 PROVENANCE_FIELDS = (
@@ -121,6 +125,7 @@ MULTI_VALUE_FIELDS = frozenset(
         "special_contents",
         "sibling_isbns",
         "sibling_editions",
+        "collected_in",
     }
 )
 
@@ -176,6 +181,7 @@ class ResolvedRecord:
 
     sibling_isbns: list[str] = field(default_factory=list)
     sibling_editions: list[str] = field(default_factory=list)
+    collected_in: list[str] = field(default_factory=list)
 
     status: str = Status.UNRESOLVED
     confidence: str = ""
