@@ -14,7 +14,7 @@ from .http import Cache, Fetcher
 from .output import write_csv, write_gap_report, write_json
 from .record import ResolvedRecord, Status
 from .resolver import Resolver
-from .sources import DEFAULT_SOURCES, REGISTRY
+from .sources import DEFAULT_SOURCES, REGISTRY, hardcover_token
 
 DEFAULT_CACHE = Path.home() / ".cache" / "blmeta" / "responses.sqlite"
 
@@ -243,6 +243,18 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
+
+    # Hardcover needs a bearer token from the environment. Dropping it here,
+    # once, beats a per-ISBN "unavailable" warning on every row -- but only
+    # when it arrived via the defaults; asked for by name, it stays, and the
+    # per-ISBN warnings then say exactly what is missing.
+    if "hardcover" in source_names and not hardcover_token():
+        if args.sources == ",".join(DEFAULT_SOURCES):
+            source_names = tuple(n for n in source_names if n != "hardcover")
+            print(
+                "note: hardcover source skipped (set HARDCOVER_TOKEN to enable)",
+                file=sys.stderr,
+            )
 
     cache = None if args.no_cache else Cache(Path(args.cache))
     fetcher = Fetcher(

@@ -269,11 +269,20 @@ class TestInputParsing(unittest.TestCase):
     def _args(**kwargs):
         return argparse.Namespace(isbns=[], input=None, **kwargs)
 
-    def _read(self, text, tmp_path="/tmp/blmeta_test_input.txt"):
-        with open(tmp_path, "w", encoding="utf-8") as handle:
+    def _read(self, text):
+        import os
+        import tempfile
+
+        handle = tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", suffix=".txt", delete=False
+        )
+        try:
             handle.write(text)
-        args = argparse.Namespace(isbns=[], input=tmp_path)
-        return read_inputs(args)
+            handle.close()
+            args = argparse.Namespace(isbns=[], input=handle.name)
+            return read_inputs(args)
+        finally:
+            os.unlink(handle.name)
 
     def test_plain_isbn_lines_with_comments(self):
         entries = self._read(f"# shelf 3\n{LIMITED}   # the LE\n\n{TRADE_HB}\n")
@@ -377,3 +386,36 @@ class TestPublisherAliases(unittest.TestCase):
 
     def test_unrelated_house_still_withheld(self):
         self.assertEqual(self._publisher("Hachette Partworks Ltd"), "")
+
+
+class TestSecondaryHitStillEnriched(unittest.TestCase):
+    """An exact-ISBN hit in a secondary source must not suppress library
+    enrichment: the national catalogue still knows the work's siblings."""
+
+    class _SecondaryHit(Source):
+        name = "secondary"
+        confidence = Confidence.MEDIUM
+
+        def search(self, isbn13):
+            return [Candidate({isbn13}, {"title": "Dante",
+                                         "publication_date": "2017-03-21",
+                                         "edition_statement": "Limited Edition"})]
+
+    def setUp(self):
+        national = _NationalStub([Candidate({TRADE_HB}, dict(SIBLING_DATA))])
+        resolver = _resolver([national, self._SecondaryHit(None)], inherit=True)
+        self.record = resolver.resolve(LIMITED, user_data={"title": "Dante"})
+
+    def test_status_stays_resolved(self):
+        self.assertEqual(self.record.status, Status.RESOLVED)
+
+    def test_edition_data_from_secondary_wins(self):
+        self.assertEqual(self.record.edition_statement, "Limited Edition")
+        self.assertEqual(self.record.publication_date, "2017-03-21")
+
+    def test_work_level_fields_inherited_from_sibling(self):
+        self.assertEqual(self.record.series, "Blood angels")
+        self.assertEqual(self.record.dewey, "823.92")
+
+    def test_sibling_isbns_recorded(self):
+        self.assertEqual(self.record.sibling_isbns, [TRADE_HB])

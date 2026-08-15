@@ -114,8 +114,18 @@ source wins each field while weaker ones fill the gaps.
 |---|---|---|
 | National Library of Scotland | `VERY_HIGH` | BNB-derived MARC over SRU. Records carry BL control numbers (`035 (Uk)...`). |
 | Library Hub Discover | `MEDIUM_HIGH` | UK union catalogue. **Off by default** — bot-challenged, returns 403 to scripts. |
+| Hardcover | `MEDIUM` | Community database, GraphQL. Holds edition-level records for several Black Library limited editions the libraries lack — `edition_information: "Limited Edition"`, page counts, release dates. Needs a bearer token in `HARDCOVER_TOKEN` (or `BOOKORBIT_HARDCOVER_TOKEN`); skipped from the defaults when absent. |
 | Open Library | `MEDIUM` | Good for covers and page counts. |
 | Google Books | `MEDIUM` | Heavily rate-limited; frequently returns HTTP 429. |
+
+Hardcover's token travels only in the `Authorization` header — never in a URL —
+so it cannot reach the on-disk response cache. Supply it from your secret
+manager, e.g. `$env:HARDCOVER_TOKEN = op read "op://vault/item/field"`.
+
+A secondary-source exact-ISBN hit does not suppress library enrichment: when
+the national bibliography lacks the ISBN but a secondary source has it, the
+sibling search still runs so work-level fields (series, classification) and
+sibling ISBNs are filled from the catalogue alongside the edition-level data.
 
 ### Why SRU and not Z39.50
 

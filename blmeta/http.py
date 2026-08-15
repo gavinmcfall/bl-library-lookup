@@ -70,13 +70,13 @@ class Cache:
     def _key(url: str) -> str:
         return hashlib.sha256(url.encode("utf-8")).hexdigest()
 
-    def get(self, url: str) -> Response | None:
+    def get(self, url: str, key: str | None = None) -> Response | None:
         if not self._conn:
             return None
         with self._lock:
             row = self._conn.execute(
                 "SELECT url, status, body, fetched_at FROM responses WHERE key = ?",
-                (self._key(url),),
+                (self._key(key or url),),
             ).fetchone()
         if not row:
             return None
@@ -84,14 +84,20 @@ class Cache:
             return None
         return Response(url=row[0], status=row[1], body=row[2], from_cache=True)
 
-    def put(self, response: Response) -> None:
+    def put(self, response: Response, key: str | None = None) -> None:
         if not self._conn:
             return
         with self._lock:
             self._conn.execute(
                 "INSERT OR REPLACE INTO responses (key, url, status, body, fetched_at)"
                 " VALUES (?, ?, ?, ?, ?)",
-                (self._key(response.url), response.url, response.status, response.body, time.time()),
+                (
+                    self._key(key or response.url),
+                    response.url,
+                    response.status,
+                    response.body,
+                    time.time(),
+                ),
             )
             self._conn.commit()
 
@@ -127,8 +133,37 @@ class Fetcher:
             self._last_hit[host] = time.time()
 
     def get(self, url: str, accept: str = "*/*") -> Response:
+        return self._request(url, accept=accept)
+
+    def post(
+        self,
+        url: str,
+        body: str,
+        headers: dict[str, str] | None = None,
+        accept: str = "application/json",
+    ) -> Response:
+        """POST with the same cache and rate limiting as GET.
+
+        The cache key covers url + body so distinct queries to one endpoint
+        cache separately. Headers are deliberately excluded from the key and
+        from storage: they are where credentials travel, and nothing secret
+        may ever reach the on-disk cache.
+        """
+        cache_key = f"POST {url}\n{body}"
+        return self._request(
+            url, accept=accept, data=body, extra_headers=headers, cache_key=cache_key
+        )
+
+    def _request(
+        self,
+        url: str,
+        accept: str,
+        data: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+        cache_key: str | None = None,
+    ) -> Response:
         if self.cache and not self.refresh:
-            cached = self.cache.get(url)
+            cached = self.cache.get(url, key=cache_key)
             if cached:
                 LOG.debug("cache hit %s", url)
                 return cached
@@ -138,8 +173,15 @@ class Fetcher:
 
         for attempt in range(self.retries):
             self._wait(host)
+            request_headers = {"User-Agent": USER_AGENT, "Accept": accept}
+            if data is not None:
+                request_headers["Content-Type"] = "application/json"
+            if extra_headers:
+                request_headers.update(extra_headers)
             request = urllib.request.Request(
-                url, headers={"User-Agent": USER_AGENT, "Accept": accept}
+                url,
+                headers=request_headers,
+                data=data.encode("utf-8") if data is not None else None,
             )
             try:
                 with urllib.request.urlopen(request, timeout=self.timeout) as handle:
@@ -152,7 +194,7 @@ class Fetcher:
                 if exc.code == 404:
                     response = Response(url=url, status=404, body="")
                     if self.cache:
-                        self.cache.put(response)
+                        self.cache.put(response, key=cache_key)
                     return response
                 last_error = exc
                 LOG.debug("HTTP %s for %s (attempt %s)", exc.code, url, attempt + 1)
@@ -172,7 +214,7 @@ class Fetcher:
                 raise FetchError(f"{type(exc).__name__} for {url}: {exc}") from exc
 
             if self.cache:
-                self.cache.put(response)
+                self.cache.put(response, key=cache_key)
             return response
 
         raise FetchError(f"exhausted retries for {url}: {last_error}")

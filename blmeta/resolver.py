@@ -204,6 +204,15 @@ class Resolver:
                 sibling_note = self._verify_declared(isbn13, declared, found, warnings)
             if not sibling_note:
                 sibling_note = self._find_siblings(isbn13, user_data, found, warnings)
+        elif national_silent:
+            # An exact-ISBN record exists, but only in a secondary source --
+            # the library catalogue still knows this work through its sibling
+            # editions. Run the sibling search purely for work-level
+            # enrichment (series, classification, subjects); the resolved
+            # status is not in question, so its note lands as a warning.
+            enrichment_note = self._find_siblings(isbn13, user_data, found, warnings)
+            if enrichment_note:
+                warnings.append(enrichment_note)
 
         record = merge(isbn13, found, _utc_now())
         record.warnings.extend(warnings)
