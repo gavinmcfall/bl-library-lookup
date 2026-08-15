@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "blmeta"
+version = "1.0.0"
+description = "Exact-ISBN metadata resolution for Black Library and other hard-to-index books"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+# Deliberately dependency-free: standard library only, so it runs anywhere
+# Python does without a virtualenv or network install.
+dependencies = []
+
+[project.scripts]
+blmeta = "blmeta.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["blmeta*"]

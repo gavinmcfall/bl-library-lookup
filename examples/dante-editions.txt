@@ -1,0 +1,5 @@
+# Three editions of Guy Haley's "Dante" (Black Library).
+# Same title, same author, three different books. Only the ISBN tells them apart.
+9781784961480   # Limited Edition -- not held by the national bibliography
+9781784965297   # 2017 hardback
+9781784966669   # 2018 paperback
