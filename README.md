@@ -202,6 +202,17 @@ rather than the edition:
 - **Never inherited:** page count, dimensions, binding, edition statement,
   publication date, price, cover — these differ between editions by definition.
 
+Publisher, imprint and place describe the *issue* rather than the work, so they
+are inherited only from a sibling published by the same house. A sibling can be
+a reissue by someone else — a Hachette partwork of a Black Library novel, say —
+and stamping that imprint on your edition would misdescribe it. When those
+fields are withheld, the reason is recorded in `warnings`.
+
+A catalogued record with **no ISBN of its own** still counts as identification
+evidence. Reissues and partworks are frequently catalogued without one; such a
+record cites no sibling ISBN, but it does establish that the work is catalogued
+while the edition in hand is not — which is the entire inference.
+
 Every inherited value is stamped in `field_provenance` with the ISBN it came
 from (`publisher=sibling:9781784965297`), so nothing is ever silently passed
 off as observed on the edition in your hand.

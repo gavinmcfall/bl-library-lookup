@@ -130,6 +130,73 @@ class TestSiblingInheritance(unittest.TestCase):
         self.assertEqual(self.record.isbn, LIMITED)
 
 
+class TestIsbnLessSiblingRecord(unittest.TestCase):
+    """A catalogued record with no ISBN still identifies an uncatalogued edition.
+
+    Reissues and partworks are often catalogued without an ISBN. Such a record
+    cites no sibling ISBN, but it does prove the work is catalogued while the
+    edition in hand is not -- which is the whole inference.
+    """
+
+    def setUp(self):
+        record_data = dict(SIBLING_DATA)
+        record_data["publisher"] = "Black Library"
+        self.candidate = Candidate(set(), record_data, record_id="99123")
+
+    def test_identifies_without_any_sibling_isbn(self):
+        resolver = _resolver([_NationalStub([self.candidate])])
+        record = resolver.resolve(LIMITED, user_data={"title": "Dante"})
+        self.assertEqual(record.status, Status.LIKELY_SPECIAL_EDITION)
+        self.assertEqual(record.sibling_isbns, [])
+        self.assertTrue(record.sibling_editions)
+        self.assertIn("no ISBN", record.sibling_editions[0])
+
+    def test_still_inherits_work_level_fields(self):
+        resolver = _resolver([_NationalStub([self.candidate])], inherit=True)
+        record = resolver.resolve(LIMITED, user_data={"title": "Dante"})
+        self.assertEqual(record.series, "Blood angels")
+        self.assertEqual(record.field_provenance["series"], "sibling:99123")
+
+
+class TestIssueLevelFieldsNotBorrowedAcrossPublishers(unittest.TestCase):
+    """A reissue by another house must not lend its imprint to this edition."""
+
+    def _record(self, publisher, hint="Black Library"):
+        data = dict(SIBLING_DATA)
+        data["publisher"] = publisher
+        data["publication_place"] = "London"
+        resolver = _resolver(
+            [_NationalStub([Candidate({TRADE_HB}, data)])], inherit=True, publisher_hint=hint
+        )
+        return resolver.resolve(LIMITED, user_data={"title": "Dante"})
+
+    def test_different_publisher_withholds_imprint(self):
+        record = self._record("Hachette Partworks Ltd")
+        self.assertEqual(record.publisher, "")
+        self.assertEqual(record.publication_place, "")
+
+    def test_different_publisher_still_lends_work_level_fields(self):
+        record = self._record("Hachette Partworks Ltd")
+        self.assertEqual(record.series, "Blood angels")
+        self.assertEqual(record.dewey, "823.92")
+
+    def test_different_publisher_is_reported(self):
+        record = self._record("Hachette Partworks Ltd")
+        self.assertTrue(
+            any("not inherited" in w for w in record.warnings),
+            "the withheld imprint must be explained",
+        )
+
+    def test_same_publisher_lends_imprint(self):
+        record = self._record("Black Library")
+        self.assertEqual(record.publisher, "Black Library")
+        self.assertEqual(record.publication_place, "London")
+
+    def test_no_hint_means_no_restriction(self):
+        record = self._record("Hachette Partworks Ltd", hint="")
+        self.assertEqual(record.publisher, "Hachette Partworks Ltd")
+
+
 class TestUserSuppliedData(unittest.TestCase):
     def test_user_data_alone_is_not_resolved(self):
         resolver = _resolver([_NationalStub()])

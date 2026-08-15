@@ -42,6 +42,13 @@ INHERITABLE_FIELDS = (
     "language",
 )
 
+# Of those, these describe the *issue* rather than the work. A sibling record
+# may be a reissue by a different house -- a Hachette partwork of a Black
+# Library novel, say -- and carrying its imprint across would misdescribe the
+# book in hand. They are inherited only from a sibling published by the same
+# house, judged against the publisher hint.
+ISSUE_LEVEL_FIELDS = frozenset({"publisher", "imprint", "publication_place"})
+
 
 def _utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -224,6 +231,7 @@ class Resolver:
 
         siblings: list[tuple[str, str]] = []
         inheritable: list[SourceRecord] = []
+        evidence_found = False
         for source in self.sources:
             searcher = getattr(source, "search_siblings", None)
             if not searcher:
@@ -249,50 +257,80 @@ class Resolver:
                 # actually correspond, not merely to contain the search term.
                 if not _same_work(title, str(data.get("title", ""))):
                     continue
-                for other in sorted(candidate.isbns):
-                    if isbn_utils.matches(isbn13, other):
-                        continue
-                    label = " ".join(
-                        part
-                        for part in (
-                            str(data.get("publication_date", "")),
-                            str(data.get("edition_statement", "")) or None,
-                            str(data.get("binding", "")) or None,
-                        )
-                        if part
-                    ).strip()
-                    siblings.append((other, f"{other} ({label})" if label else other))
+
+                evidence_found = True
+                label = " ".join(
+                    part
+                    for part in (
+                        str(data.get("publication_date", "")),
+                        str(data.get("edition_statement", "")) or None,
+                        str(data.get("binding", "")) or None,
+                    )
+                    if part
+                ).strip()
+
+                others = [
+                    other
+                    for other in sorted(candidate.isbns)
+                    if not isbn_utils.matches(isbn13, other)
+                ]
+                if others:
+                    for other in others:
+                        siblings.append((other, f"{other} ({label})" if label else other))
+                else:
+                    # A catalogued record carrying no ISBN of its own. It
+                    # cannot supply a sibling ISBN, but it does establish that
+                    # the work is catalogued while this edition is not.
+                    publisher_seen = str(data.get("publisher", "")) or "unknown publisher"
+                    descriptor = f"(no ISBN in record) {publisher_seen}"
+                    if label:
+                        descriptor += f", {label}"
+                    siblings.append(("", descriptor))
 
                 if self.inherit_siblings:
+                    sibling_publisher = str(data.get("publisher", ""))
+                    same_house = not publisher or not sibling_publisher or (
+                        publisher.lower() in sibling_publisher.lower()
+                    )
                     shared = {
                         key: value
                         for key, value in data.items()
-                        if key in INHERITABLE_FIELDS and value
+                        if key in INHERITABLE_FIELDS
+                        and value
+                        and (same_house or key not in ISSUE_LEVEL_FIELDS)
                     }
+                    if not same_house:
+                        warnings.append(
+                            f"Sibling record is published by '{sibling_publisher}', "
+                            f"not '{publisher}'; its imprint details were not "
+                            "inherited."
+                        )
                     if shared:
-                        first = sorted(candidate.isbns)[0]
+                        known = sorted(candidate.isbns)
+                        origin = known[0] if known else (candidate.record_id or "no-isbn")
                         inheritable.append(
                             SourceRecord(
                                 # Provenance names the ISBN the value came
                                 # from, so an inherited field is never mistaken
                                 # for one observed on this edition.
-                                source=f"sibling:{first}",
+                                source=f"sibling:{origin}",
                                 confidence=Confidence.MEDIUM,
                                 data=shared,
                             )
                         )
 
-        if not siblings:
+        if not evidence_found:
             return None
 
         seen: set[str] = set()
         isbns: list[str] = []
         descriptions: list[str] = []
         for other, description in siblings:
-            if other in seen:
+            if description in seen:
                 continue
-            seen.add(other)
-            isbns.append(other)
+            seen.add(description)
+            if other:
+                isbns.append(other)
             descriptions.append(description)
 
         found.append(
@@ -310,12 +348,19 @@ class Resolver:
                 "the ISBN each came from. Edition-specific fields were not "
                 "inherited."
             )
+        if isbns:
+            detail = f"{len(isbns)} sibling edition(s) are: {', '.join(isbns)}"
+        else:
+            detail = (
+                "the work is catalogued, but the matching record carries no ISBN "
+                "of its own, so no sibling ISBN can be cited"
+            )
         return (
-            f"Not catalogued under this ISBN, but {len(isbns)} sibling edition(s) of "
-            f"'{title}' are: {', '.join(isbns)}. A valid publisher ISBN with no "
-            "catalogue record of its own, alongside catalogued siblings, is the "
-            "signature of an uncatalogued special/limited edition. Sibling data is "
-            "kept in the sibling_* columns and is NOT metadata for this edition."
+            f"Not catalogued under this ISBN. For '{title}', {detail}. A valid "
+            "publisher ISBN with no catalogue record of its own, alongside a "
+            "catalogued record of the same work, is the signature of an "
+            "uncatalogued special/limited edition. Sibling data is kept in the "
+            "sibling_* columns and is NOT metadata for this edition."
         )
 
     @staticmethod

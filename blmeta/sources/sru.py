@@ -41,12 +41,19 @@ class SRUSource(Source):
         }
         return f"{self.base_url}?{urllib.parse.urlencode(params)}"
 
-    def _candidates_from(self, url: str) -> list[Candidate]:
+    def _candidates_from(self, url: str, require_isbn: bool = True) -> list[Candidate]:
+        """Parse an SRU response into candidates.
+
+        ``require_isbn`` is True for exact-ISBN lookup, where a record without
+        an ISBN can never match. Sibling identification passes False: a
+        catalogued record with no ISBN still proves the work exists and still
+        carries usable work-level metadata.
+        """
         response = self.fetcher.get(url, accept="application/xml")
         candidates: list[Candidate] = []
         for record in marc.iter_records(response.body):
             isbns = marc.record_isbns(record)
-            if not isbns:
+            if require_isbn and not isbns:
                 continue
             candidates.append(
                 Candidate(
@@ -81,7 +88,9 @@ class SRUSource(Source):
             clauses.append(f'{self.creator_index}="{author}"')
         if publisher:
             clauses.append(f'{self.publisher_index}="{publisher}"')
-        return self._candidates_from(self._url(" and ".join(clauses), limit=25))
+        return self._candidates_from(
+            self._url(" and ".join(clauses), limit=25), require_isbn=False
+        )
 
     def search(self, isbn13: str) -> list[Candidate]:
         try:
