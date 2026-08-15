@@ -110,6 +110,8 @@ class TestResolverStatuses(unittest.TestCase):
         resolver = Resolver.__new__(Resolver)
         resolver.fetcher = None
         resolver.raw_dir = None
+        resolver.inherit_siblings = False
+        resolver.publisher_hint = ""
         resolver.sources = sources
         return resolver
 

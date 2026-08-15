@@ -39,15 +39,16 @@ class _NationalStub(Source):
     def search(self, isbn13):
         return []
 
-    def search_siblings(self, title, author):
+    def search_siblings(self, title, author="", publisher=""):
         return self._siblings
 
 
-def _resolver(sources, inherit=False):
+def _resolver(sources, inherit=False, publisher_hint="Black Library"):
     resolver = Resolver.__new__(Resolver)
     resolver.fetcher = None
     resolver.raw_dir = None
     resolver.inherit_siblings = inherit
+    resolver.publisher_hint = publisher_hint
     resolver.sources = sources
     return resolver
 

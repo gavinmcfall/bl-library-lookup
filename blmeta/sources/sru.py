@@ -29,6 +29,7 @@ class SRUSource(Source):
 
     title_index = "alma.title"
     creator_index = "alma.creator"
+    publisher_index = "alma.publisher"
 
     def _url(self, query: str, limit: int = 10) -> str:
         params = {
@@ -58,12 +59,18 @@ class SRUSource(Source):
             )
         return candidates
 
-    def search_siblings(self, title: str, author: str) -> list[Candidate]:
+    def search_siblings(
+        self, title: str, author: str = "", publisher: str = ""
+    ) -> list[Candidate]:
         """Find other editions of the same work.
 
         Used only to *identify* an ISBN the catalogue does not hold. The
         results describe different editions and are never merged into the
         record's own bibliographic fields.
+
+        A title alone is rarely enough: "Dante" matches over 1700 records and
+        the real book is not in the first page of results. A second term --
+        author or publisher -- is what makes the search land.
         """
         if not title:
             return []
@@ -72,6 +79,8 @@ class SRUSource(Source):
         clauses = [f'{self.title_index}="{title}"']
         if author:
             clauses.append(f'{self.creator_index}="{author}"')
+        if publisher:
+            clauses.append(f'{self.publisher_index}="{publisher}"')
         return self._candidates_from(self._url(" and ".join(clauses), limit=25))
 
     def search(self, isbn13: str) -> list[Candidate]:

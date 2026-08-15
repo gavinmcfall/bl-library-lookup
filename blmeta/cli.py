@@ -179,6 +179,14 @@ def build_parser() -> argparse.ArgumentParser:
             "field_provenance records which ISBN each came from"
         ),
     )
+    parser.add_argument(
+        "--publisher-hint",
+        default="Black Library",
+        help=(
+            "publisher used to narrow sibling searches when no author is known "
+            "(default: 'Black Library'; pass '' to disable)"
+        ),
+    )
     parser.add_argument("--no-cache", action="store_true", help="disable the cache")
     parser.add_argument(
         "--refresh", action="store_true", help="ignore cached responses and refetch"
@@ -227,6 +235,7 @@ def main(argv: list[str] | None = None) -> int:
             source_names=source_names,
             raw_dir=raw_dir,
             inherit_siblings=args.inherit_siblings,
+            publisher_hint=args.publisher_hint,
         )
     except ValueError as exc:
         print(str(exc), file=sys.stderr)

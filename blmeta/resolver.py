@@ -71,10 +71,12 @@ class Resolver:
         source_names: tuple[str, ...] = DEFAULT_SOURCES,
         raw_dir: Path | None = None,
         inherit_siblings: bool = False,
+        publisher_hint: str = "Black Library",
     ):
         self.fetcher = fetcher
         self.raw_dir = raw_dir
         self.inherit_siblings = inherit_siblings
+        self.publisher_hint = publisher_hint
         self.sources = []
         for name in source_names:
             cls = REGISTRY.get(name)
@@ -208,6 +210,17 @@ class Resolver:
         # Only the surname is needed, and MARC stores names inverted
         # ("Haley, Guy"), so a full "Guy Haley" string matches poorly.
         surname = author.split(",")[0].split()[-1] if author else ""
+        publisher = str(user_data.get("publisher") or self.publisher_hint or "").strip()
+
+        # A title alone is too weak a query to find siblings, so pair it with a
+        # second term. Each strategy is tried until one lands; a wrong hint
+        # simply returns nothing and falls through to the next.
+        strategies: list[tuple[str, str]] = []
+        if surname:
+            strategies.append((surname, ""))
+        if publisher:
+            strategies.append(("", publisher))
+        strategies.append(("", ""))
 
         siblings: list[tuple[str, str]] = []
         inheritable: list[SourceRecord] = []
@@ -215,14 +228,20 @@ class Resolver:
             searcher = getattr(source, "search_siblings", None)
             if not searcher:
                 continue
-            try:
-                candidates = searcher(title, surname)
-            except FetchError as exc:
-                warnings.append(f"{source.name}: sibling search unavailable ({exc})")
-                continue
-            except Exception as exc:
-                LOG.warning("%s sibling search failed: %s", source.name, exc)
-                continue
+
+            candidates: list = []
+            for strategy_author, strategy_publisher in strategies:
+                try:
+                    found_now = searcher(title, strategy_author, strategy_publisher)
+                except FetchError as exc:
+                    warnings.append(f"{source.name}: sibling search unavailable ({exc})")
+                    break
+                except Exception as exc:
+                    LOG.warning("%s sibling search failed: %s", source.name, exc)
+                    break
+                if any(_same_work(title, str(c.data.get("title", ""))) for c in found_now):
+                    candidates = found_now
+                    break
 
             for candidate in candidates:
                 data = candidate.data

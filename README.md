@@ -89,6 +89,7 @@ blmeta -i shelf.txt -o out.csv --refresh      # bypass the cache
 | `--json-out` | full records as JSON, including nested provenance |
 | `--raw-dir` | preserve raw MARCXML/JSON evidence per ISBN |
 | `--inherit-siblings` | fill work-level fields on uncatalogued editions from a catalogued sibling |
+| `--publisher-hint` | narrows sibling searches when no author is known (default `Black Library`) |
 | `--sources` | pick sources: `nls,libraryhub,openlibrary,googlebooks` |
 | `--delay` | seconds between requests to one host (default 1.0) |
 | `--refresh` / `--no-cache` | bypass or disable the response cache |
@@ -183,6 +184,13 @@ the same work:
 A valid publisher ISBN with **no catalogue record of its own**, sitting
 alongside **catalogued siblings of the same work**, is the signature of an
 uncatalogued special edition. That inference is what the status records.
+
+A title alone is too weak a query to find siblings: searching NLS for "Dante"
+returns 1,700+ records and the real book is nowhere near the first page. So the
+search pairs the title with a second term, trying author, then publisher
+(`--publisher-hint`, defaulting to `Black Library`), then title alone. A wrong
+hint costs nothing — it returns no results and falls through to the next
+strategy.
 
 Sibling metadata lands in the `sibling_*` columns and never in the
 bibliographic ones — it describes different ISBNs. With `--inherit-siblings`
