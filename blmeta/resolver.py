@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import isbn as isbn_utils
 from .http import FetchError, Fetcher
-from .record import ResolvedRecord, SourceRecord, Status, merge
+from .record import Confidence, ResolvedRecord, SourceRecord, Status, merge
 from .sources import DEFAULT_SOURCES, REGISTRY
 
 LOG = logging.getLogger("blmeta.resolver")
@@ -23,9 +23,45 @@ _SPECIAL_EDITION = re.compile(
     re.IGNORECASE,
 )
 
+# Fields that belong to the *work* and are therefore genuinely shared between
+# editions, so they may be inherited from a sibling under --inherit-siblings.
+# Everything else (page count, dimensions, binding, edition statement,
+# publication date, price, cover) differs between editions by definition and is
+# never inherited.
+INHERITABLE_FIELDS = (
+    "author",
+    "contributors",
+    "publisher",
+    "imprint",
+    "publication_place",
+    "series",
+    "series_number",
+    "subjects",
+    "dewey",
+    "lc_classification",
+    "language",
+)
+
 
 def _utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _normalise_title(value: str) -> str:
+    value = re.sub(r"\s*[:/].*$", "", value)  # drop subtitle and responsibility
+    value = re.sub(r"^(the|a|an)\s+", "", value.strip(), flags=re.IGNORECASE)
+    return re.sub(r"[^a-z0-9]", "", value.lower())
+
+
+def _same_work(query: str, candidate: str) -> bool:
+    """Whether a catalogue hit is really the same work as the one asked for.
+
+    Catalogue title indexes match loosely -- searching "Dante" also returns
+    "Accounting for Dante". Requiring the normalised titles to be equal keeps
+    sibling identification honest.
+    """
+    left, right = _normalise_title(query), _normalise_title(candidate)
+    return bool(left) and left == right
 
 
 class Resolver:
@@ -34,9 +70,11 @@ class Resolver:
         fetcher: Fetcher,
         source_names: tuple[str, ...] = DEFAULT_SOURCES,
         raw_dir: Path | None = None,
+        inherit_siblings: bool = False,
     ):
         self.fetcher = fetcher
         self.raw_dir = raw_dir
+        self.inherit_siblings = inherit_siblings
         self.sources = []
         for name in source_names:
             cls = REGISTRY.get(name)
@@ -44,7 +82,10 @@ class Resolver:
                 raise ValueError(f"unknown source: {name}")
             self.sources.append(cls(fetcher))
 
-    def resolve(self, raw_isbn: str) -> ResolvedRecord:
+    def resolve(
+        self, raw_isbn: str, user_data: dict[str, object] | None = None
+    ) -> ResolvedRecord:
+        user_data = {k: v for k, v in (user_data or {}).items() if v not in (None, "", [])}
         isbn13 = isbn_utils.canonical(raw_isbn)
         if not isbn13:
             record = ResolvedRecord(
@@ -58,11 +99,16 @@ class Resolver:
             return record
 
         found: list[SourceRecord] = []
+        if user_data:
+            found.append(
+                SourceRecord(source="user", confidence=Confidence.USER, data=dict(user_data))
+            )
         warnings: list[str] = []
         national_answered = False
         national_silent = True
         secondary_failed = False
 
+        catalogue_hit = False
         for source in self.sources:
             try:
                 result = source.lookup(isbn13)
@@ -84,15 +130,29 @@ class Resolver:
 
             if result:
                 found.append(result)
+                catalogue_hit = True
                 if source.is_national_bibliography:
                     national_silent = False
                 if self.raw_dir:
                     self._save_raw(isbn13, result)
 
+        # The catalogue does not hold this ISBN. If we know what the book is,
+        # look for its other editions -- that is what identifies an
+        # uncatalogued limited edition.
+        sibling_note = None
+        if not catalogue_hit:
+            sibling_note = self._find_siblings(isbn13, user_data, found, warnings)
+
         record = merge(isbn13, found, _utc_now())
         record.warnings.extend(warnings)
 
-        if not found:
+        if sibling_note:
+            record.status = Status.LIKELY_SPECIAL_EDITION
+            record.warnings.append(sibling_note)
+            self._flag_special_edition(record)
+            return record
+
+        if not catalogue_hit:
             # Distinguish proven absence from failure to look. Only the
             # national bibliography source's silence settles this; a blocked
             # retailer or union catalogue does not.
@@ -101,9 +161,9 @@ class Resolver:
                 record.warnings.append(
                     "No exact-ISBN record in any queried source. For Black Library "
                     "limited editions this is common: special editions frequently "
-                    "never receive their own catalogue record. Check the trade "
-                    "edition's ISBN for shared bibliographic data, and the "
-                    "publisher/archive record for edition-specific details."
+                    "never receive their own catalogue record. Supply a title (and "
+                    "author) for this ISBN to search for its sibling editions, "
+                    "which is how an uncatalogued limited edition is identified."
                 )
                 if secondary_failed:
                     record.warnings.append(
@@ -124,6 +184,120 @@ class Resolver:
 
         self._flag_special_edition(record)
         return record
+
+    def _find_siblings(
+        self,
+        isbn13: str,
+        user_data: dict[str, object],
+        found: list[SourceRecord],
+        warnings: list[str],
+    ) -> str | None:
+        """Identify an uncatalogued edition by finding its siblings.
+
+        Returns a human-readable note when sibling editions were found, or
+        None. The sibling metadata is recorded in dedicated ``sibling_*``
+        fields only -- it describes other ISBNs, so letting it reach the
+        bibliographic fields would be exactly the substitution this tool
+        exists to prevent.
+        """
+        title = str(user_data.get("title") or "").strip()
+        author = str(user_data.get("author") or "").strip()
+        if not title:
+            return None
+
+        # Only the surname is needed, and MARC stores names inverted
+        # ("Haley, Guy"), so a full "Guy Haley" string matches poorly.
+        surname = author.split(",")[0].split()[-1] if author else ""
+
+        siblings: list[tuple[str, str]] = []
+        inheritable: list[SourceRecord] = []
+        for source in self.sources:
+            searcher = getattr(source, "search_siblings", None)
+            if not searcher:
+                continue
+            try:
+                candidates = searcher(title, surname)
+            except FetchError as exc:
+                warnings.append(f"{source.name}: sibling search unavailable ({exc})")
+                continue
+            except Exception as exc:
+                LOG.warning("%s sibling search failed: %s", source.name, exc)
+                continue
+
+            for candidate in candidates:
+                data = candidate.data
+                # Guard against loose catalogue matching: require the title to
+                # actually correspond, not merely to contain the search term.
+                if not _same_work(title, str(data.get("title", ""))):
+                    continue
+                for other in sorted(candidate.isbns):
+                    if isbn_utils.matches(isbn13, other):
+                        continue
+                    label = " ".join(
+                        part
+                        for part in (
+                            str(data.get("publication_date", "")),
+                            str(data.get("edition_statement", "")) or None,
+                            str(data.get("binding", "")) or None,
+                        )
+                        if part
+                    ).strip()
+                    siblings.append((other, f"{other} ({label})" if label else other))
+
+                if self.inherit_siblings:
+                    shared = {
+                        key: value
+                        for key, value in data.items()
+                        if key in INHERITABLE_FIELDS and value
+                    }
+                    if shared:
+                        first = sorted(candidate.isbns)[0]
+                        inheritable.append(
+                            SourceRecord(
+                                # Provenance names the ISBN the value came
+                                # from, so an inherited field is never mistaken
+                                # for one observed on this edition.
+                                source=f"sibling:{first}",
+                                confidence=Confidence.MEDIUM,
+                                data=shared,
+                            )
+                        )
+
+        if not siblings:
+            return None
+
+        seen: set[str] = set()
+        isbns: list[str] = []
+        descriptions: list[str] = []
+        for other, description in siblings:
+            if other in seen:
+                continue
+            seen.add(other)
+            isbns.append(other)
+            descriptions.append(description)
+
+        found.append(
+            SourceRecord(
+                source="sibling-search",
+                confidence=Confidence.USER,  # ranked high so it is never overwritten
+                data={"sibling_isbns": isbns, "sibling_editions": descriptions},
+            )
+        )
+        found.extend(inheritable)
+        if inheritable:
+            warnings.append(
+                "Work-level fields (author, publisher, series, classification) "
+                "were inherited from a sibling edition; field_provenance names "
+                "the ISBN each came from. Edition-specific fields were not "
+                "inherited."
+            )
+        return (
+            f"Not catalogued under this ISBN, but {len(isbns)} sibling edition(s) of "
+            f"'{title}' are: {', '.join(isbns)}. A valid publisher ISBN with no "
+            "catalogue record of its own, alongside catalogued siblings, is the "
+            "signature of an uncatalogued special/limited edition. Sibling data is "
+            "kept in the sibling_* columns and is NOT metadata for this edition."
+        )
 
     @staticmethod
     def _flag_special_edition(record: ResolvedRecord) -> None:

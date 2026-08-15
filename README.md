@@ -39,16 +39,39 @@ python3 -m blmeta.cli 9781784965297
 Cataloguing a stack of books — the main use case:
 
 ```bash
-blmeta --input my-shelf.txt --output collection.csv
+blmeta --input my-shelf.txt --output collection.csv --inherit-siblings
 ```
 
-`my-shelf.txt` is one ISBN per line; `#` comments and trailing notes are
-ignored, so you can annotate as you type them in:
+### Input formats
+
+**Bare ISBNs**, one per line. `#` comments are stripped, so annotate freely:
 
 ```
 9781784965297   # Dante, hardback, shelf 3
 9781849708500
 ```
+
+**Pipe-delimited**, when you are holding a limited edition and want its
+copy-specific details recorded. Fields are
+`isbn | title | author | edition_number | print_run | signed | notes`, and you
+can stop at any point:
+
+```
+9781784961480 | Dante | Guy Haley | 247/1500 | 1500 | yes, signed by author
+9781784965297 | Dante
+```
+
+**CSV with a header**, if you would rather work in a spreadsheet. Recognised
+columns include `isbn`, `title`, `author`, `copy_number`/`edition_number`,
+`print_run`, `signed`, `notes`:
+
+```csv
+isbn,title,author,copy_number,signed
+9781784961480,Dante,Guy Haley,247/1500,yes
+```
+
+Anything you supply yourself outranks every online source. For copy-specific
+facts that is simply correct: no database on earth knows your copy is №247.
 
 Other options:
 
@@ -65,6 +88,7 @@ blmeta -i shelf.txt -o out.csv --refresh      # bypass the cache
 | `-o, --output` | CSV destination (default stdout) |
 | `--json-out` | full records as JSON, including nested provenance |
 | `--raw-dir` | preserve raw MARCXML/JSON evidence per ISBN |
+| `--inherit-siblings` | fill work-level fields on uncatalogued editions from a catalogued sibling |
 | `--sources` | pick sources: `nls,libraryhub,openlibrary,googlebooks` |
 | `--delay` | seconds between requests to one host (default 1.0) |
 | `--refresh` / `--no-cache` | bypass or disable the response cache |
@@ -113,7 +137,8 @@ One row per ISBN. Columns are grouped:
 | Status | Meaning |
 |---|---|
 | `RESOLVED` | An exact-ISBN record was found. |
-| `NOT_IN_NATIONAL_BIBLIOGRAPHY` | Valid ISBN, the national source answered, and it holds no such record. **Proven absence.** |
+| `LIKELY_SPECIAL_EDITION` | Not catalogued under this ISBN, but sibling editions of the same work are. **This is how a limited edition is identified.** |
+| `NOT_IN_NATIONAL_BIBLIOGRAPHY` | Valid ISBN, the national source answered, and it holds no such record — and no siblings were found (or no title was supplied to search for them). |
 | `UNRESOLVED` | Nothing found, but a source was unreachable — absence is *not* proven. |
 | `INVALID_ISBN` | Failed checksum or length. |
 
@@ -128,13 +153,10 @@ Note that catalogue-in-publication (CIP) data ranks *below* a published
 catalogue record. CIP is supplied by the publisher before the book exists, so
 its titles, page counts and dates are provisional and are often superseded.
 
-## Expect limited editions to come back empty
-
-This is the single most important thing to know before you run it on a
-collection of special editions.
+## Identifying limited editions
 
 Black Library limited editions frequently have **no catalogue record at all**.
-Running the three *Dante* ISBNs:
+Running the three *Dante* ISBNs bare:
 
 ```
 9781784965297 -> RESOLVED (VERY_HIGH)
@@ -142,7 +164,48 @@ Running the three *Dante* ISBNs:
 9781784961480 -> NOT_IN_NATIONAL_BIBLIOGRAPHY
 ```
 
-The trade editions are catalogued. The Limited Edition is not.
+The trade editions are catalogued. The Limited Edition is not. So how do you
+identify it? By its **siblings**.
+
+Give the LE a title, and `blmeta` searches the catalogue for other editions of
+the same work:
+
+```
+9781784961480 | Dante | Guy Haley | 247/1500 | 1500 | yes, signed
+```
+
+```
+-> LIKELY_SPECIAL_EDITION
+   sibling_isbns:    9781784965297 | 9781784966669
+   sibling_editions: 9781784965297 (2017 hardback) | 9781784966669 (2018)
+```
+
+A valid publisher ISBN with **no catalogue record of its own**, sitting
+alongside **catalogued siblings of the same work**, is the signature of an
+uncatalogued special edition. That inference is what the status records.
+
+Sibling metadata lands in the `sibling_*` columns and never in the
+bibliographic ones — it describes different ISBNs. With `--inherit-siblings`
+you can additionally fill in the fields that genuinely belong to the *work*
+rather than the edition:
+
+- **Inherited:** author, publisher, imprint, place, series, subjects, Dewey,
+  LC classification, language.
+- **Never inherited:** page count, dimensions, binding, edition statement,
+  publication date, price, cover — these differ between editions by definition.
+
+Every inherited value is stamped in `field_provenance` with the ISBN it came
+from (`publisher=sibling:9781784965297`), so nothing is ever silently passed
+off as observed on the edition in your hand.
+
+### Your copy number can only come from you
+
+`limited_edition_number`, `print_run` and `signed` are not in any database.
+№247 of 1500 is a fact about the physical object on your shelf. Type it in as
+you catalogue — user-supplied data outranks every online source, which for
+these fields is the only correct ranking.
+
+### On the CIP statement
 
 It is tempting to read the imprint page — "A CIP record for this book is
 available from the British Library" — as proof that a record exists for *that*
@@ -151,18 +214,6 @@ essentially every UK trade book, and a limited edition is usually typeset from
 the same imprint page as the trade edition. Publishers often never submit
 separate CIP for a special edition, so the statement is inherited text rather
 than evidence about the ISBN in your hand.
-
-When you get `NOT_IN_NATIONAL_BIBLIOGRAPHY`, the practical route is:
-
-1. Look up the **trade edition's** ISBN for shared bibliographic data (author,
-   series, publication year, Dewey) — most of it is common to both editions.
-2. Get edition-specific details (print run, numbering, slipcase, signature)
-   from archived Black Library product pages, Warhammer Community
-   announcements, or collector archives, and record them in the collectible
-   columns by hand.
-
-Keeping those two steps separate is why the CSV separates the two column
-groups. Do not let step 2 overwrite step 1.
 
 ### A note on the British Library
 

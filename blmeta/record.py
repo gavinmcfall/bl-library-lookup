@@ -22,6 +22,9 @@ class Confidence(IntEnum):
     MEDIUM_HIGH = 4  # major national/union library catalogue
     HIGH = 5  # pre-publication CIP record carrying the exact ISBN
     VERY_HIGH = 6  # published national bibliography record, exact ISBN
+    # You, holding the book. For copy-specific facts -- edition number, print
+    # run, signature -- this is the only authority that exists anywhere.
+    USER = 7
 
     @property
     def label(self) -> str:
@@ -36,6 +39,10 @@ class Status:
     # Valid ISBN, reachable sources, genuinely not catalogued anywhere.
     # For Black Library limited editions this is a common, legitimate result.
     NOT_IN_NATIONAL_BIBLIOGRAPHY = "NOT_IN_NATIONAL_BIBLIOGRAPHY"
+    # Not catalogued under this ISBN, but sibling editions of the same
+    # title/author are. That pattern is what an uncatalogued special or
+    # limited edition looks like from the outside.
+    LIKELY_SPECIAL_EDITION = "LIKELY_SPECIAL_EDITION"
     # Sources errored or were blocked, so absence is not proven.
     UNRESOLVED = "UNRESOLVED"
 
@@ -81,6 +88,14 @@ COLLECTIBLE_FIELDS = (
     "original_retail_price",
 )
 
+# Sibling-edition evidence. Held strictly apart from the bibliographic block:
+# this describes a *different* ISBN, and must never be read as metadata for the
+# edition in hand. It is here to identify the book, not to describe it.
+SIBLING_FIELDS = (
+    "sibling_isbns",
+    "sibling_editions",
+)
+
 PROVENANCE_FIELDS = (
     "status",
     "confidence",
@@ -91,12 +106,22 @@ PROVENANCE_FIELDS = (
     "warnings",
 )
 
-CSV_COLUMNS = BIBLIOGRAPHIC_FIELDS + COLLECTIBLE_FIELDS + PROVENANCE_FIELDS
+CSV_COLUMNS = (
+    BIBLIOGRAPHIC_FIELDS + COLLECTIBLE_FIELDS + SIBLING_FIELDS + PROVENANCE_FIELDS
+)
 
 # Fields that accumulate values from every source rather than being overwritten
 # by the winning one.
 MULTI_VALUE_FIELDS = frozenset(
-    {"contributors", "subjects", "notes", "other_identifiers", "special_contents"}
+    {
+        "contributors",
+        "subjects",
+        "notes",
+        "other_identifiers",
+        "special_contents",
+        "sibling_isbns",
+        "sibling_editions",
+    }
 )
 
 
@@ -149,6 +174,9 @@ class ResolvedRecord:
     cover_artist: str = ""
     original_retail_price: str = ""
 
+    sibling_isbns: list[str] = field(default_factory=list)
+    sibling_editions: list[str] = field(default_factory=list)
+
     status: str = Status.UNRESOLVED
     confidence: str = ""
     metadata_sources: list[str] = field(default_factory=list)
@@ -180,7 +208,7 @@ def merge(isbn13: str, records: list[SourceRecord], retrieved_at: str) -> Resolv
     out.date_retrieved = retrieved_at
 
     ordered = sorted(records, key=lambda r: r.confidence, reverse=True)
-    known = set(BIBLIOGRAPHIC_FIELDS) | set(COLLECTIBLE_FIELDS)
+    known = set(BIBLIOGRAPHIC_FIELDS) | set(COLLECTIBLE_FIELDS) | set(SIBLING_FIELDS)
 
     for record in ordered:
         if record.source not in out.metadata_sources:
@@ -209,7 +237,10 @@ def merge(isbn13: str, records: list[SourceRecord], retrieved_at: str) -> Resolv
                 setattr(out, key, str(value).strip() if not isinstance(value, str) else value.strip())
                 out.field_provenance[key] = record.source
 
-    if ordered:
+    # Your own notes identify the copy but do not resolve the ISBN against any
+    # catalogue, so a user-only record is not RESOLVED.
+    catalogue_hits = [r for r in ordered if r.confidence is not Confidence.USER]
+    if catalogue_hits:
         out.status = Status.RESOLVED
-        out.confidence = ordered[0].confidence.label
+        out.confidence = catalogue_hits[0].confidence.label
     return out

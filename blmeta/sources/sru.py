@@ -27,24 +27,21 @@ class SRUSource(Source):
     sru_version = "1.2"
     record_schema = "marcxml"
 
-    def _url(self, isbn13: str) -> str:
+    title_index = "alma.title"
+    creator_index = "alma.creator"
+
+    def _url(self, query: str, limit: int = 10) -> str:
         params = {
             "version": self.sru_version,
             "operation": "searchRetrieve",
             "recordSchema": self.record_schema,
-            "maximumRecords": "10",
-            "query": f"{self.isbn_index}={isbn13}",
+            "maximumRecords": str(limit),
+            "query": query,
         }
         return f"{self.base_url}?{urllib.parse.urlencode(params)}"
 
-    def search(self, isbn13: str) -> list[Candidate]:
-        url = self._url(isbn13)
-        try:
-            response = self.fetcher.get(url, accept="application/xml")
-        except FetchError as exc:
-            LOG.info("%s unavailable: %s", self.name, exc)
-            raise
-
+    def _candidates_from(self, url: str) -> list[Candidate]:
+        response = self.fetcher.get(url, accept="application/xml")
         candidates: list[Candidate] = []
         for record in marc.iter_records(response.body):
             isbns = marc.record_isbns(record)
@@ -60,6 +57,29 @@ class SRUSource(Source):
                 )
             )
         return candidates
+
+    def search_siblings(self, title: str, author: str) -> list[Candidate]:
+        """Find other editions of the same work.
+
+        Used only to *identify* an ISBN the catalogue does not hold. The
+        results describe different editions and are never merged into the
+        record's own bibliographic fields.
+        """
+        if not title:
+            return []
+        # Quoting each term matters: unquoted terms are ORed by Alma and return
+        # thousands of unrelated hits.
+        clauses = [f'{self.title_index}="{title}"']
+        if author:
+            clauses.append(f'{self.creator_index}="{author}"')
+        return self._candidates_from(self._url(" and ".join(clauses), limit=25))
+
+    def search(self, isbn13: str) -> list[Candidate]:
+        try:
+            return self._candidates_from(self._url(f"{self.isbn_index}={isbn13}"))
+        except FetchError as exc:
+            LOG.info("%s unavailable: %s", self.name, exc)
+            raise
 
 
 class NationalLibraryOfScotland(SRUSource):
