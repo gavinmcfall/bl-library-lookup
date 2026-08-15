@@ -40,3 +40,39 @@ def write_csv(records: Iterable[ResolvedRecord], handle: TextIO) -> int:
 def write_json(records: Iterable[ResolvedRecord], path: Path) -> None:
     payload = [record.as_dict() for record in records]
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+# Fields no online source will ever hold for a collectible edition: they are
+# facts about the physical object, readable only from the book in hand.
+FROM_THE_BOOK = (
+    "limited_edition_number",
+    "print_run",
+    "signed",
+    "cover_artist",
+    "original_retail_price",
+    "publication_date",
+    "page_count",
+    "dimensions",
+    "binding",
+)
+
+
+def write_gap_report(records, handle) -> int:
+    """A per-book checklist of what is still missing.
+
+    Written for use with the books in front of you: for limited editions most
+    of these can only come off the limitation page, the imprint page or a
+    ruler, so this doubles as a stocktaking sheet.
+    """
+    incomplete = 0
+    for record in records:
+        missing = [f for f in FROM_THE_BOOK if not getattr(record, f, "")]
+        if not missing:
+            continue
+        incomplete += 1
+        label = record.title or "(untitled)"
+        handle.write(f"{record.isbn}  {label}\n")
+        for name in missing:
+            handle.write(f"    [ ] {name}\n")
+        handle.write("\n")
+    return incomplete

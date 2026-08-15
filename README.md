@@ -96,6 +96,7 @@ blmeta -i shelf.txt -o out.csv --refresh      # bypass the cache
 | `--raw-dir` | preserve raw MARCXML/JSON evidence per ISBN |
 | `--inherit-siblings` | fill work-level fields on uncatalogued editions from a catalogued sibling |
 | `--publisher-hint` | narrows sibling searches when no author is known (default `Black Library`) |
+| `--gaps` | write a per-book checklist of still-missing fields |
 | `--sources` | pick sources: `nls,libraryhub,openlibrary,googlebooks` |
 | `--delay` | seconds between requests to one host (default 1.0) |
 | `--refresh` / `--no-cache` | bypass or disable the response cache |
@@ -222,6 +223,20 @@ while the edition in hand is not — which is the entire inference.
 Every inherited value is stamped in `field_provenance` with the ISBN it came
 from (`publisher=sibling:9781784965297`), so nothing is ever silently passed
 off as observed on the edition in your hand.
+
+### Most of what is still missing is on the book, not online
+
+Run with `--gaps` for a per-book checklist. For limited editions nearly every
+remaining field is a fact about the physical object rather than about the
+edition, and no publisher, retailer or library holds it:
+
+| Field | Where it actually is |
+|---|---|
+| `print_run`, `limited_edition_number` | the limitation page ("this is copy 247 of 1500") |
+| `signed` | the signature page |
+| `cover_artist` | the credits or imprint page |
+| `publication_date` | the imprint page |
+| `page_count`, `dimensions`, `binding` | the book itself |
 
 ### Your copy number can only come from you
 

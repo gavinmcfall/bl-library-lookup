@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import isbn as isbn_utils
 from .http import Cache, Fetcher
-from .output import write_csv, write_json
+from .output import write_csv, write_gap_report, write_json
 from .record import ResolvedRecord, Status
 from .resolver import Resolver
 from .sources import DEFAULT_SOURCES, REGISTRY
@@ -200,6 +200,13 @@ def build_parser() -> argparse.ArgumentParser:
             "(default: 'Black Library'; pass '' to disable)"
         ),
     )
+    parser.add_argument(
+        "--gaps",
+        help=(
+            "write a per-book checklist of still-missing fields here; for "
+            "limited editions most of these are only readable off the book"
+        ),
+    )
     parser.add_argument("--no-cache", action="store_true", help="disable the cache")
     parser.add_argument(
         "--refresh", action="store_true", help="ignore cached responses and refetch"
@@ -276,6 +283,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\nwrote {len(records)} rows to {args.output}", file=sys.stderr)
         else:
             write_csv(records, sys.stdout)
+
+        if args.gaps:
+            with open(args.gaps, "w", encoding="utf-8") as handle:
+                incomplete = write_gap_report(records, handle)
+            print(f"wrote gap checklist for {incomplete} book(s) to {args.gaps}", file=sys.stderr)
 
         if args.json_out:
             write_json(records, Path(args.json_out))
