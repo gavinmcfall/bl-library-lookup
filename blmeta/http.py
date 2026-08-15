@@ -185,8 +185,18 @@ class Fetcher:
             )
             try:
                 with urllib.request.urlopen(request, timeout=self.timeout) as handle:
-                    charset = handle.headers.get_content_charset() or "utf-8"
-                    body = handle.read().decode(charset, errors="replace")
+                    raw = handle.read()
+                    charset = handle.headers.get_content_charset()
+                    if charset:
+                        body = raw.decode(charset, errors="replace")
+                    else:
+                        # Older archived pages serve cp1252 with no charset
+                        # header; utf-8 first, then cp1252, keeps both eras
+                        # readable.
+                        try:
+                            body = raw.decode("utf-8")
+                        except UnicodeDecodeError:
+                            body = raw.decode("cp1252", errors="replace")
                     response = Response(url=url, status=handle.status, body=body)
             except urllib.error.HTTPError as exc:
                 # 404 is a real answer -- the resource does not exist. Anything

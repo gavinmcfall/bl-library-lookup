@@ -15,6 +15,7 @@ dependencies = []
 
 [project.scripts]
 blmeta = "blmeta.cli:main"
+blmeta-wayback = "blmeta.wayback:main"
 
 [tool.setuptools.packages.find]
 include = ["blmeta*"]

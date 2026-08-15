@@ -237,6 +237,31 @@ Every inherited value is stamped in `field_provenance` with the ISBN it came
 from (`publisher=sibling:9781784965297`), so nothing is ever silently passed
 off as observed on the edition in your hand.
 
+### Finding print runs: the Wayback helper
+
+The collectible half of the record — print run, slipcase contents, cover
+finish, original price — never reached any catalogue. It lived on
+blacklibrary.com product pages, which are gone from the live site but survive
+in the Wayback Machine:
+
+```bash
+blmeta-wayback "Corax"
+```
+
+```
+Primarchs: Corax (Limited Edition)
+  availability: Only 2,500 copies ...
+  numbered: yes (page mentions individual numbering)
+  prices seen on page: $65.00, ...
+```
+
+This is deliberately a *suggestion* helper, not a pipeline source: archived
+product pages carry no ISBN, so a page can never pass the exact-ISBN match
+that gates real sources. Read the page, confirm it describes the edition in
+your hand, then copy the details into the collectible columns of your shelf
+file. Responses are cached, so a re-run after Wayback's frequent timeouts
+costs nothing.
+
 ### Most of what is still missing is on the book, not online
 
 Run with `--gaps` for a per-book checklist. For limited editions nearly every
